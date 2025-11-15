@@ -125,16 +125,44 @@ server {{
         logger.warning(f"Error checking for existing nginx container: {e}")
 
     # Run Nginx container
+    # Get host paths from gui container's mounts
+    # When creating containers via Docker API, we need host filesystem paths
+    logger.info("Getting host paths from container mounts...")
+    try:
+        gui_container = client.containers.get('gui')
+        mounts = gui_container.attrs['Mounts']
+        host_paths = {}
+        for mount in mounts:
+            if mount['Destination'] == '/nginx/conf':
+                host_paths['nginx_conf'] = mount['Source']
+            elif mount['Destination'] == '/cert/www':
+                host_paths['cert_www'] = mount['Source']
+            elif mount['Destination'] == '/cert/conf':
+                host_paths['cert_conf'] = mount['Source']
+        
+        logger.info(f"Host paths: {host_paths}")
+        
+        # Use host paths for volume mounts
+        volumes = {
+            host_paths.get('nginx_conf', '/nginx/conf'): {'bind': '/etc/nginx/conf.d', 'mode': 'ro'},
+            host_paths.get('cert_www', '/cert/www'): {'bind': '/var/www/certbot', 'mode': 'ro'},
+            host_paths.get('cert_conf', '/cert/conf'): {'bind': '/etc/letsencrypt', 'mode': 'ro'},
+        }
+    except Exception as e:
+        logger.warning(f"Could not get host paths from container mounts: {e}, using container paths")
+        # Fallback to container paths (may not work)
+        volumes = {
+            '/nginx/conf': {'bind': '/etc/nginx/conf.d', 'mode': 'ro'},
+            '/cert/www': {'bind': '/var/www/certbot', 'mode': 'ro'},
+            '/cert/conf': {'bind': '/etc/letsencrypt', 'mode': 'ro'},
+        }
+    
     logger.info("Creating and starting nginx container...")
     client.containers.run(
         'nginx:alpine',
         name='nginx',
         ports={'80/tcp': 80, '443/tcp': 443},
-        volumes={
-            '/nginx/conf': {'bind': '/etc/nginx/conf.d', 'mode': 'ro'},
-            '/cert/www': {'bind': '/var/www/certbot', 'mode': 'ro'},
-            '/cert/conf': {'bind': '/etc/letsencrypt', 'mode': 'ro'},
-        },
+        volumes=volumes,
         detach=True,
         restart_policy={"Name": "unless-stopped"},
     )
