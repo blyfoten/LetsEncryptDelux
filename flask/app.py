@@ -4,13 +4,24 @@ import requests
 import socket
 import docker
 import threading
+import logging
 from enum import Enum
 
 app = Flask(__name__)
 app.secret_key = 'your_secret_key'  # Replace with a secure secret key
 
+# Enable debug mode and logging
+app.config['DEBUG'] = True
+logging.basicConfig(level=logging.DEBUG)
+logger = logging.getLogger(__name__)
+
 # Initialize Docker client
-client = docker.DockerClient(base_url='unix://var/run/docker.sock')
+try:
+    client = docker.DockerClient(base_url='unix://var/run/docker.sock')
+    logger.info("Docker client initialized successfully")
+except Exception as e:
+    logger.error(f"Failed to initialize Docker client: {e}")
+    raise
 
 class StepStatus(Enum):
     PENDING = 'PENDING'
@@ -31,15 +42,20 @@ def reverse_lookup(ip):
 
 def start_ssl_process(domain, email, steps_status):
     try:
+        logger.info(f"Starting SSL process for domain: {domain}, email: {email}")
         # Step 1: Start Nginx container with sample HTTP config
         update_step_status(steps_status, 'nginx', StepStatus.PENDING)
+        logger.debug("Step 1: Starting Nginx container...")
         start_nginx_container(domain)
         update_step_status(steps_status, 'nginx', StepStatus.SUCCESS)
+        logger.debug("Step 1: Nginx container started successfully")
 
         # Step 2: Request Let's Encrypt certificate
         update_step_status(steps_status, 'certbot', StepStatus.PENDING)
+        logger.debug("Step 2: Requesting Let's Encrypt certificate...")
         request_certificate(domain, email)
         update_step_status(steps_status, 'certbot', StepStatus.SUCCESS)
+        logger.debug("Step 2: Certificate requested successfully")
 
         # Step 3: Update Nginx configuration for HTTPS
         update_step_status(steps_status, 'nginx_config', StepStatus.PENDING)
@@ -52,7 +68,9 @@ def start_ssl_process(domain, email, steps_status):
         update_step_status(steps_status, 'nginx_restart', StepStatus.SUCCESS)
 
         steps_status['complete'] = True
+        logger.info(f"SSL process completed successfully for {domain}")
     except Exception as e:
+        logger.error(f"SSL process failed for {domain}: {e}", exc_info=True)
         steps_status['error'] = str(e)
         # Mark any pending steps as failed
         for step in steps_status:
@@ -95,7 +113,19 @@ server {{
     with open('/nginx/conf/default.conf', 'w') as f:
         f.write(nginx_conf)
 
+    # Check if nginx container already exists and remove it
+    try:
+        existing_nginx = client.containers.get('nginx')
+        logger.info("Removing existing nginx container...")
+        existing_nginx.remove(force=True)
+        logger.info("Existing nginx container removed")
+    except docker.errors.NotFound:
+        logger.debug("No existing nginx container found")
+    except Exception as e:
+        logger.warning(f"Error checking for existing nginx container: {e}")
+
     # Run Nginx container
+    logger.info("Creating and starting nginx container...")
     client.containers.run(
         'nginx:alpine',
         name='nginx',
@@ -108,19 +138,25 @@ server {{
         detach=True,
         restart_policy={"Name": "unless-stopped"},
     )
+    logger.info("Nginx container started successfully")
 
 def request_certificate(domain, email):
     # Pull Certbot image
+    logger.info("Pulling certbot/certbot image...")
     client.images.pull('certbot/certbot')
+    logger.info("Certbot image pulled successfully")
 
     # Build Certbot command
     email_arg = f'--email {email}' if email else '--register-unsafely-without-email'
+    certbot_cmd = f'certonly --webroot -w /var/www/certbot {email_arg} --agree-tos -d {domain} --non-interactive'
+    logger.info(f"Running certbot with command: {certbot_cmd}")
 
     # Run Certbot container
-    client.containers.run(
+    logger.info("Starting certbot container...")
+    result = client.containers.run(
         'certbot/certbot',
         name='certbot',
-        command=f'certonly --webroot -w /var/www/certbot {email_arg} --agree-tos -d {domain} --non-interactive',
+        command=certbot_cmd,
         volumes={
             '/cert/conf': {'bind': '/etc/letsencrypt', 'mode': 'rw'},
             '/cert/www': {'bind': '/var/www/certbot', 'mode': 'rw'},
@@ -131,6 +167,7 @@ def request_certificate(domain, email):
         detach=False,
         remove=True,
     )
+    logger.info(f"Certbot completed: {result.decode() if result else 'No output'}")
 
 def update_nginx_config(domain):
     # Update Nginx configuration for HTTPS
@@ -220,4 +257,5 @@ def status():
     return {}
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=8070)
+    logger.info("Starting Flask application on 0.0.0.0:8070")
+    app.run(host='0.0.0.0', port=8070, debug=True)
