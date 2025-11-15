@@ -1,67 +1,220 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
+    <meta charset="UTF-8">
     <title>SSL Certificate Setup</title>
     <style>
-        body { font-family: Arial, sans-serif; }
-        .container { max-width: 600px; margin: 50px auto; }
-        .status { display: flex; align-items: center; }
-        .status span { margin-left: 10px; }
-        .success { color: green; }
-        .failure { color: red; }
-        .pending { color: orange; }
+        :root {
+            color-scheme: light dark;
+            --bg: linear-gradient(135deg, #0f2027, #203a43, #2c5364);
+            --card-bg: rgba(255, 255, 255, 0.09);
+            --border: rgba(255,255,255,0.2);
+            --text: #f8f9fb;
+            --muted: #c5ced6;
+            --accent: #4ad7a8;
+            --accent-soft: rgba(74, 215, 168, 0.15);
+            --danger: #ff6b6b;
+            --warning: #f7c948;
+        }
+
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            margin: 0;
+            min-height: 100vh;
+            font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            background-image: var(--bg);
+            color: var(--text);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 32px;
+        }
+
+        .card {
+            width: min(720px, 95vw);
+            background: var(--card-bg);
+            backdrop-filter: blur(14px);
+            border: 1px solid var(--border);
+            border-radius: 24px;
+            padding: 32px;
+            box-shadow: 0 30px 60px rgba(0,0,0,0.35);
+        }
+
+        h1 {
+            margin: 0 0 12px;
+            font-size: 1.8rem;
+            font-weight: 600;
+        }
+
+        p.subtitle {
+            margin: 0 0 24px;
+            color: var(--muted);
+        }
+
+        .info-pill {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 14px;
+            border-radius: 999px;
+            background: var(--accent-soft);
+            color: var(--accent);
+            font-size: 0.9rem;
+            margin-bottom: 24px;
+        }
+
+        form {
+            display: grid;
+            gap: 20px;
+        }
+
+        label {
+            font-weight: 600;
+            margin-bottom: 8px;
+            display: block;
+        }
+
+        input, select {
+            width: 100%;
+            padding: 14px 16px;
+            border-radius: 14px;
+            border: 1px solid var(--border);
+            background: rgba(0,0,0,0.25);
+            color: var(--text);
+            font-size: 1rem;
+        }
+
+        input::placeholder {
+            color: rgba(255,255,255,0.5);
+        }
+
+        small {
+            color: var(--muted);
+            display: block;
+            margin-top: 6px;
+        }
+
+        button {
+            border: none;
+            border-radius: 16px;
+            padding: 16px;
+            font-size: 1rem;
+            font-weight: 600;
+            cursor: pointer;
+            background: var(--accent);
+            color: #0f2027;
+            transition: transform 0.2s ease, box-shadow 0.2s ease;
+        }
+
+        button:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 15px 30px rgba(74, 215, 168, 0.35);
+        }
+
+        .status-list {
+            margin-top: 32px;
+            padding-top: 24px;
+            border-top: 1px solid var(--border);
+            list-style: none;
+            padding-left: 0;
+        }
+
+        .status-item {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 12px 0;
+        }
+
+        .status-dot {
+            width: 14px;
+            height: 14px;
+            border-radius: 50%;
+            flex-shrink: 0;
+            border: 2px solid currentColor;
+        }
+
+        .status-success { color: var(--accent); }
+        .status-failure { color: var(--danger); }
+        .status-pending { color: var(--warning); animation: pulse 1.5s ease infinite; }
+
+        @keyframes pulse {
+            0% { opacity: 0.4; }
+            50% { opacity: 1; }
+            100% { opacity: 0.4; }
+        }
+
+        .callout {
+            margin-top: 18px;
+            padding: 14px 16px;
+            border-radius: 14px;
+            font-weight: 500;
+        }
+
+        .callout.success {
+            background: var(--accent-soft);
+            color: var(--accent);
+        }
+
+        .callout.error {
+            background: rgba(255,107,107,0.15);
+            color: var(--danger);
+        }
     </style>
 </head>
 <body>
-    <div class="container">
-        <h2>SSL Certificate Setup</h2>
-        <p>Your public IP address is: <strong>{{ public_ip }}</strong></p>
+    <div class="card">
+        <h1>Let's Encrypt Helper</h1>
+        <p class="subtitle">Spin up a secure Nginx endpoint with a trusted certificate in a few clicks.</p>
+        <span class="info-pill">Public IP: <strong>{{ public_ip or 'N/A' }}</strong></span>
 
         <form method="post">
             <div>
-                <label for="domain">Domain:</label><br>
+                <label for="domain">Domain</label>
+                <input type="text"
+                       name="domain"
+                       id="domain"
+                       list="domain-suggestions"
+                       value="{{ domain or '' }}"
+                       required
+                       placeholder="e.g., example.com">
                 {% if domain_options %}
-                    <select name="domain" id="domain">
-                        {% for domain in domain_options %}
-                            <option value="{{ domain }}">{{ domain }}</option>
+                    <datalist id="domain-suggestions">
+                        {% for option in domain_options %}
+                            <option value="{{ option }}"></option>
                         {% endfor %}
-                    </select>
-                {% else %}
-                    <input type="text" name="domain" id="domain" required placeholder="Enter your domain name">
+                    </datalist>
                 {% endif %}
-                <small>The domain must point to this server's public IP address.</small>
+                <small>The domain must already resolve to this server's public IP.</small>
             </div>
-            <br>
+
             <div>
-                <label for="email">Admin Email (optional):</label><br>
-                <input type="email" name="email" id="email" placeholder="Enter your email address">
-                <small>Providing an email allows Let's Encrypt to send you expiration notices.</small>
+                <label for="email">Admin Email <span style="font-weight:400;color:var(--muted)">(optional)</span></label>
+                <input type="email" name="email" id="email" value="{{ email or '' }}" placeholder="you@example.com">
+                <small>Used by Let's Encrypt to notify you about renewals and issues.</small>
             </div>
-            <br>
-            <button type="submit">Start SSL Process</button>
+
+            <button type="submit">Start SSL Automation</button>
         </form>
 
         {% if processing %}
-            <h3>SSL Generation Steps:</h3>
-            <ul>
+            <ul class="status-list">
                 {% for key, step in steps_status.items() if key not in ['complete', 'error'] %}
-                    <li class="status">
-                        {% if step.status == 'SUCCESS' %}
-                            <span class="success">&#10004;</span>
-                        {% elif step.status == 'FAILURE' %}
-                            <span class="failure">&#10008;</span>
-                        {% else %}
-                            <span class="pending">&#8987;</span>
-                        {% endif %}
+                    {% set status_value = step.status if step.status is string else step.status.value %}
+                    <li class="status-item status-{{ status_value.lower() }}">
+                        <span class="status-dot"></span>
                         <span>{{ step.label }}</span>
                     </li>
                 {% endfor %}
             </ul>
 
             {% if steps_status.complete %}
-                <p class="success">SSL certificate setup completed successfully!</p>
+                <div class="callout success">SSL certificate setup completed successfully!</div>
             {% elif steps_status.error %}
-                <p class="failure">Error: {{ steps_status.error }}</p>
+                <div class="callout error">Error: {{ steps_status.error }}</div>
             {% endif %}
         {% endif %}
     </div>

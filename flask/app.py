@@ -58,12 +58,13 @@ def start_ssl_process(domain, email, steps_status):
         for step in steps_status:
             if step in ['complete', 'error']:
                 continue  # Skip non-step keys
-            if steps_status[step]['status'] == StepStatus.PENDING:
-                steps_status[step]['status'] = StepStatus.FAILURE
+            if steps_status[step]['status'] == StepStatus.PENDING.value:
+                steps_status[step]['status'] = StepStatus.FAILURE.value
 
 
 def update_step_status(steps_status, step_key, status):
-    steps_status[step_key]['status'] = status
+    status_value = status.value if isinstance(status, StepStatus) else status
+    steps_status[step_key]['status'] = status_value
 
 def start_nginx_container(domain):
     # Pull Nginx image
@@ -196,10 +197,10 @@ def index():
         domain = request.form.get('domain')
         email = request.form.get('email')
         steps_status = {
-            'nginx': {'label': 'Starting Nginx container', 'status': StepStatus.PENDING},
-            'certbot': {'label': 'Requesting Let\'s Encrypt certificate', 'status': StepStatus.PENDING},
-            'nginx_config': {'label': 'Updating Nginx configuration', 'status': StepStatus.PENDING},
-            'nginx_restart': {'label': 'Restarting Nginx container', 'status': StepStatus.PENDING},
+            'nginx': {'label': 'Starting Nginx container', 'status': StepStatus.PENDING.value},
+            'certbot': {'label': 'Requesting Let\'s Encrypt certificate', 'status': StepStatus.PENDING.value},
+            'nginx_config': {'label': 'Updating Nginx configuration', 'status': StepStatus.PENDING.value},
+            'nginx_restart': {'label': 'Restarting Nginx container', 'status': StepStatus.PENDING.value},
             'complete': False,
             'error': None
         }
