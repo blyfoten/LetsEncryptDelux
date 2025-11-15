@@ -1,15 +1,8 @@
 #!/bin/sh
+set -e
 
-# Start Docker daemon in the background
-dockerd &
+echo "Installing Python dependencies..."
+pip install --no-cache-dir flask docker requests > /dev/null 2>&1
 
-# Wait until Docker daemon is ready
-echo "Waiting for Docker daemon to be ready..."
-until docker info >/dev/null 2>&1; do
-    sleep 1
-done
-
-echo "Docker daemon is ready. Starting the application..."
-
-# Run the Flask application
-python /app/app.py
+echo "Starting Flask application..."
+exec python /app/app.py

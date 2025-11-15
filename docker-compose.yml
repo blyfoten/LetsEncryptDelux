@@ -1,18 +1,19 @@
 services:
   gui:
-    build:
-      context: .
-      dockerfile: Dockerfile
+    image: python:3.11-slim-bookworm
     container_name: gui
-    privileged: true  # Required for Docker-in-Docker
     volumes:
       - ./cert_data:/cert
       - ./nginx_conf:/nginx/conf
       - ./flask:/app
+      - ./entrypoint.sh:/entrypoint.sh:ro
+      - /var/run/docker.sock:/var/run/docker.sock
     ports:
       - "8070:8070"
       - "80:80"
       - "443:443"
     environment:
       - DOCKER_HOST=unix:///var/run/docker.sock
+    working_dir: /app
+    entrypoint: ["/bin/sh", "/entrypoint.sh"]
     restart: unless-stopped

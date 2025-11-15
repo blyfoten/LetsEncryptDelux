@@ -1,6 +1,6 @@
 # Let's Encrypt Helper GUI
 
-A Dockerized Flask interface that provisions free TLS certificates from Let's Encrypt and configures an accompanying Nginx instance automatically. It embeds Docker-in-Docker so the UI container can control helper containers (Nginx + Certbot) while persisting all certificate artifacts on the host.
+A Dockerized Flask interface that provisions free TLS certificates from Let's Encrypt and configures an accompanying Nginx instance automatically. The UI container talks to the _host_ Docker daemon via the mounted `/var/run/docker.sock`, so helper containers (Nginx + Certbot) run alongside the app while persisting all certificate artifacts on the host.
 
 ## Features
 - Web UI to collect domain name and optional admin email.
@@ -12,9 +12,8 @@ A Dockerized Flask interface that provisions free TLS certificates from Let's En
 
 | Path | Purpose |
 | --- | --- |
-| `docker-compose.yml` | Runs the GUI container with the necessary volume mounts and port mappings. |
-| `Dockerfile` | Builds the GUI image (Python 3.9 slim + Docker CLI/daemon + Flask app). |
-| `entrypoint.sh` | Starts Docker daemon inside the container and then launches the Flask app. |
+| `docker-compose.yml` | Runs the GUI container using the official Python image with mounted code and host Docker socket. |
+| `entrypoint.sh` | Installs Python dependencies and launches the Flask app. |
 | `flask/app.py` | Core Flask application; orchestrates Docker containers for Nginx and Certbot. |
 | `flask/templates/index.html` | HTML template for submitting domains and monitoring step status. |
 | `nginx_conf/` | Target directory where the Flask app writes the live Nginx configuration. |
@@ -28,7 +27,7 @@ A Dockerized Flask interface that provisions free TLS certificates from Let's En
 5. Certificates stay on disk so renewals or restarts don't require re-issuance (subject to Let's Encrypt rate limits).
 
 ## Prerequisites
-- Docker Engine with Docker Compose v2.
+- Docker Engine with Docker Compose v2 (the host daemon must expose `/var/run/docker.sock`).
 - Public DNS A record pointing to the host and inbound access on ports 80, 443, and 8070.
 - Internet access for pulling container images and contacting Let’s Encrypt.
 
@@ -36,10 +35,10 @@ A Dockerized Flask interface that provisions free TLS certificates from Let's En
 ```bash
 git clone <your-repo-url>
 cd letsencrypt
-docker compose up -d --build
+docker compose up -d
 ```
 
-Then open `http://<your-server>:8070` to kick off certificate issuance.
+No build step required! The stack uses the official Python image and mounts your code. Then open `http://<your-server>:8070` to kick off certificate issuance.
 
 ## Operational Notes
 - Replace `app.secret_key` in `flask/app.py` with a strong random value before deploying publicly.
