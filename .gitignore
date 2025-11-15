@@ -1,0 +1,26 @@
+# Python artifacts
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+
+# Environments
+.env
+.venv/
+env/
+venv/
+
+# IDEs / editors
+.vscode/
+.idea/
+
+# Docker / runtime outputs
+cert_data/
+nginx_conf/default.conf
+docker-compose.override.yml
+*.log
+
+# OS-specific
+.DS_Store
+Thumbs.db
+

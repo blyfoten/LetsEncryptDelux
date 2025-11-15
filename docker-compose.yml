@@ -1,0 +1,18 @@
+services:
+  gui:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: gui
+    privileged: true  # Required for Docker-in-Docker
+    volumes:
+      - ./cert_data:/cert
+      - ./nginx_conf:/nginx/conf
+      - ./flask:/app
+    ports:
+      - "8070:8070"
+      - "80:80"
+      - "443:443"
+    environment:
+      - DOCKER_HOST=unix:///var/run/docker.sock
+    restart: unless-stopped

@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>SSL Certificate Setup</title>
+    <style>
+        body { font-family: Arial, sans-serif; }
+        .container { max-width: 600px; margin: 50px auto; }
+        .status { display: flex; align-items: center; }
+        .status span { margin-left: 10px; }
+        .success { color: green; }
+        .failure { color: red; }
+        .pending { color: orange; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h2>SSL Certificate Setup</h2>
+        <p>Your public IP address is: <strong>{{ public_ip }}</strong></p>
+
+        <form method="post">
+            <div>
+                <label for="domain">Domain:</label><br>
+                {% if domain_options %}
+                    <select name="domain" id="domain">
+                        {% for domain in domain_options %}
+                            <option value="{{ domain }}">{{ domain }}</option>
+                        {% endfor %}
+                    </select>
+                {% else %}
+                    <input type="text" name="domain" id="domain" required placeholder="Enter your domain name">
+                {% endif %}
+                <small>The domain must point to this server's public IP address.</small>
+            </div>
+            <br>
+            <div>
+                <label for="email">Admin Email (optional):</label><br>
+                <input type="email" name="email" id="email" placeholder="Enter your email address">
+                <small>Providing an email allows Let's Encrypt to send you expiration notices.</small>
+            </div>
+            <br>
+            <button type="submit">Start SSL Process</button>
+        </form>
+
+        {% if processing %}
+            <h3>SSL Generation Steps:</h3>
+            <ul>
+                {% for key, step in steps_status.items() if key not in ['complete', 'error'] %}
+                    <li class="status">
+                        {% if step.status == 'SUCCESS' %}
+                            <span class="success">&#10004;</span>
+                        {% elif step.status == 'FAILURE' %}
+                            <span class="failure">&#10008;</span>
+                        {% else %}
+                            <span class="pending">&#8987;</span>
+                        {% endif %}
+                        <span>{{ step.label }}</span>
+                    </li>
+                {% endfor %}
+            </ul>
+
+            {% if steps_status.complete %}
+                <p class="success">SSL certificate setup completed successfully!</p>
+            {% elif steps_status.error %}
+                <p class="failure">Error: {{ steps_status.error }}</p>
+            {% endif %}
+        {% endif %}
+    </div>
+</body>
+</html>
