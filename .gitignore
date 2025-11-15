@@ -20,6 +20,10 @@ nginx_conf/default.conf
 docker-compose.override.yml
 *.log
 
+# Test files
+test_*.html
+*.test.html
+
 # OS-specific
 .DS_Store
 Thumbs.db
