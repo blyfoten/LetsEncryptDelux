@@ -1,4 +1,4 @@
-from flask import Flask, render_template, request, redirect, url_for, flash
+from flask import Flask, render_template, request, jsonify
 import os
 import requests
 import socket
@@ -10,14 +10,16 @@ from enum import Enum
 app = Flask(__name__)
 app.secret_key = 'your_secret_key'  # Replace with a secure secret key
 
-# Enable debug mode and logging
 app.config['DEBUG'] = True
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
 
-# Initialize Docker client
+# Global store for in-flight and completed jobs keyed by domain
+active_jobs = {}
+active_jobs_lock = threading.Lock()
+
 try:
-    client = docker.DockerClient(base_url='unix://var/run/docker.sock')
+    client = docker.from_env()
     logger.info("Docker client initialized successfully")
 except Exception as e:
     logger.error(f"Failed to initialize Docker client: {e}")
@@ -30,7 +32,7 @@ class StepStatus(Enum):
 
 def get_public_ip():
     try:
-        return requests.get('https://api.ipify.org').text
+        return requests.get('https://api.ipify.org', timeout=5).text
     except requests.RequestException:
         return None
 
@@ -40,29 +42,50 @@ def reverse_lookup(ip):
     except socket.herror:
         return None
 
-def start_ssl_process(domain, email, steps_status):
+def get_host_paths():
+    """Resolve host filesystem paths from the GUI container's volume mounts."""
+    try:
+        gui_container = client.containers.get('gui')
+        mounts = gui_container.attrs['Mounts']
+        host_paths = {}
+        for mount in mounts:
+            dest = mount['Destination']
+            src = mount['Source']
+            if dest == '/nginx/conf':
+                host_paths['nginx_conf'] = src
+            elif dest == '/cert':
+                # Derive cert subdirectory host paths from the parent /cert mount
+                host_paths['cert_www'] = src + '/www'
+                host_paths['cert_conf'] = src + '/conf'
+                host_paths['cert_logs'] = src + '/logs'
+        logger.info(f"Resolved host paths: {host_paths}")
+        return host_paths
+    except Exception as e:
+        logger.warning(f"Could not resolve host paths from container mounts: {e}")
+        return {}
+
+def update_step_status(steps_status, step_key, status):
+    status_value = status.value if isinstance(status, StepStatus) else status
+    steps_status[step_key]['status'] = status_value
+
+def start_ssl_process(domain, email, job_id):
+    with active_jobs_lock:
+        steps_status = active_jobs[job_id]
     try:
         logger.info(f"Starting SSL process for domain: {domain}, email: {email}")
-        # Step 1: Start Nginx container with sample HTTP config
+
         update_step_status(steps_status, 'nginx', StepStatus.PENDING)
-        logger.debug("Step 1: Starting Nginx container...")
         start_nginx_container(domain)
         update_step_status(steps_status, 'nginx', StepStatus.SUCCESS)
-        logger.debug("Step 1: Nginx container started successfully")
 
-        # Step 2: Request Let's Encrypt certificate
         update_step_status(steps_status, 'certbot', StepStatus.PENDING)
-        logger.debug("Step 2: Requesting Let's Encrypt certificate...")
         request_certificate(domain, email)
         update_step_status(steps_status, 'certbot', StepStatus.SUCCESS)
-        logger.debug("Step 2: Certificate requested successfully")
 
-        # Step 3: Update Nginx configuration for HTTPS
         update_step_status(steps_status, 'nginx_config', StepStatus.PENDING)
         update_nginx_config(domain)
         update_step_status(steps_status, 'nginx_config', StepStatus.SUCCESS)
 
-        # Step 4: Restart Nginx container
         update_step_status(steps_status, 'nginx_restart', StepStatus.PENDING)
         restart_nginx_container()
         update_step_status(steps_status, 'nginx_restart', StepStatus.SUCCESS)
@@ -72,29 +95,19 @@ def start_ssl_process(domain, email, steps_status):
     except Exception as e:
         logger.error(f"SSL process failed for {domain}: {e}", exc_info=True)
         steps_status['error'] = str(e)
-        # Mark any pending steps as failed
-        for step in steps_status:
+        for step in list(steps_status.keys()):
             if step in ['complete', 'error']:
-                continue  # Skip non-step keys
+                continue
             if steps_status[step]['status'] == StepStatus.PENDING.value:
                 steps_status[step]['status'] = StepStatus.FAILURE.value
 
-
-def update_step_status(steps_status, step_key, status):
-    status_value = status.value if isinstance(status, StepStatus) else status
-    steps_status[step_key]['status'] = status_value
-
 def start_nginx_container(domain):
-    # Pull Nginx image
     client.images.pull('nginx:alpine')
 
-    # Create necessary directories
     os.makedirs('/cert/www', exist_ok=True)
     os.makedirs('/nginx/conf', exist_ok=True)
 
-    # Create Nginx HTTP configuration
-    nginx_conf = f"""
-server {{
+    nginx_conf = f"""server {{
     listen 80;
     server_name {domain};
 
@@ -108,56 +121,24 @@ server {{
     }}
 }}
 """
-
-    # Write Nginx configuration to file
     with open('/nginx/conf/default.conf', 'w') as f:
         f.write(nginx_conf)
 
-    # Check if nginx container already exists and remove it
     try:
-        existing_nginx = client.containers.get('nginx')
+        existing = client.containers.get('nginx')
         logger.info("Removing existing nginx container...")
-        existing_nginx.remove(force=True)
-        logger.info("Existing nginx container removed")
+        existing.remove(force=True)
     except docker.errors.NotFound:
-        logger.debug("No existing nginx container found")
-    except Exception as e:
-        logger.warning(f"Error checking for existing nginx container: {e}")
+        pass
 
-    # Run Nginx container
-    # Get host paths from gui container's mounts
-    # When creating containers via Docker API, we need host filesystem paths
-    logger.info("Getting host paths from container mounts...")
-    try:
-        gui_container = client.containers.get('gui')
-        mounts = gui_container.attrs['Mounts']
-        host_paths = {}
-        for mount in mounts:
-            if mount['Destination'] == '/nginx/conf':
-                host_paths['nginx_conf'] = mount['Source']
-            elif mount['Destination'] == '/cert/www':
-                host_paths['cert_www'] = mount['Source']
-            elif mount['Destination'] == '/cert/conf':
-                host_paths['cert_conf'] = mount['Source']
-        
-        logger.info(f"Host paths: {host_paths}")
-        
-        # Use host paths for volume mounts
-        volumes = {
-            host_paths.get('nginx_conf', '/nginx/conf'): {'bind': '/etc/nginx/conf.d', 'mode': 'ro'},
-            host_paths.get('cert_www', '/cert/www'): {'bind': '/var/www/certbot', 'mode': 'ro'},
-            host_paths.get('cert_conf', '/cert/conf'): {'bind': '/etc/letsencrypt', 'mode': 'ro'},
-        }
-    except Exception as e:
-        logger.warning(f"Could not get host paths from container mounts: {e}, using container paths")
-        # Fallback to container paths (may not work)
-        volumes = {
-            '/nginx/conf': {'bind': '/etc/nginx/conf.d', 'mode': 'ro'},
-            '/cert/www': {'bind': '/var/www/certbot', 'mode': 'ro'},
-            '/cert/conf': {'bind': '/etc/letsencrypt', 'mode': 'ro'},
-        }
-    
-    logger.info("Creating and starting nginx container...")
+    host_paths = get_host_paths()
+    volumes = {
+        host_paths.get('nginx_conf', '/nginx/conf'): {'bind': '/etc/nginx/conf.d', 'mode': 'ro'},
+        host_paths.get('cert_www', '/cert/www'):     {'bind': '/var/www/certbot',   'mode': 'ro'},
+        host_paths.get('cert_conf', '/cert/conf'):   {'bind': '/etc/letsencrypt',   'mode': 'ro'},
+    }
+
+    logger.info(f"Starting nginx container with volumes: {volumes}")
     client.containers.run(
         'nginx:alpine',
         name='nginx',
@@ -166,41 +147,49 @@ server {{
         detach=True,
         restart_policy={"Name": "unless-stopped"},
     )
-    logger.info("Nginx container started successfully")
+    logger.info("Nginx container started")
 
 def request_certificate(domain, email):
-    # Pull Certbot image
-    logger.info("Pulling certbot/certbot image...")
     client.images.pull('certbot/certbot')
-    logger.info("Certbot image pulled successfully")
 
-    # Build Certbot command
+    try:
+        existing = client.containers.get('certbot')
+        logger.info("Removing existing certbot container...")
+        existing.remove(force=True)
+    except docker.errors.NotFound:
+        pass
+
+    os.makedirs('/cert/conf', exist_ok=True)
+    os.makedirs('/cert/www', exist_ok=True)
+    os.makedirs('/cert/logs', exist_ok=True)
+
     email_arg = f'--email {email}' if email else '--register-unsafely-without-email'
-    certbot_cmd = f'certonly --webroot -w /var/www/certbot {email_arg} --agree-tos -d {domain} --non-interactive'
-    logger.info(f"Running certbot with command: {certbot_cmd}")
+    certbot_cmd = (
+        f'certonly --webroot -w /var/www/certbot {email_arg} '
+        f'--agree-tos -d {domain} --non-interactive'
+    )
+    logger.info(f"Running certbot: {certbot_cmd}")
 
-    # Run Certbot container
-    logger.info("Starting certbot container...")
+    host_paths = get_host_paths()
+    volumes = {
+        host_paths.get('cert_conf', '/cert/conf'): {'bind': '/etc/letsencrypt',        'mode': 'rw'},
+        host_paths.get('cert_www',  '/cert/www'):  {'bind': '/var/www/certbot',         'mode': 'rw'},
+        host_paths.get('cert_logs', '/cert/logs'): {'bind': '/var/log/letsencrypt',     'mode': 'rw'},
+    }
+
+    logger.info(f"Starting certbot container with volumes: {volumes}")
     result = client.containers.run(
         'certbot/certbot',
-        name='certbot',
         command=certbot_cmd,
-        volumes={
-            '/cert/conf': {'bind': '/etc/letsencrypt', 'mode': 'rw'},
-            '/cert/www': {'bind': '/var/www/certbot', 'mode': 'rw'},
-            '/cert/logs': {'bind': '/var/log/letsencrypt', 'mode': 'rw'},
-
-        },
+        volumes=volumes,
         network_mode='host',
         detach=False,
         remove=True,
     )
-    logger.info(f"Certbot completed: {result.decode() if result else 'No output'}")
+    logger.info(f"Certbot output: {result.decode() if result else 'No output'}")
 
 def update_nginx_config(domain):
-    # Update Nginx configuration for HTTPS
-    nginx_conf = f"""
-server {{
+    nginx_conf = f"""server {{
     listen 80;
     server_name {domain};
     return 301 https://$host$request_uri;
@@ -210,7 +199,7 @@ server {{
     listen 443 ssl;
     server_name {domain};
 
-    ssl_certificate /etc/letsencrypt/live/{domain}/fullchain.pem;
+    ssl_certificate     /etc/letsencrypt/live/{domain}/fullchain.pem;
     ssl_certificate_key /etc/letsencrypt/live/{domain}/privkey.pem;
     ssl_protocols TLSv1.2 TLSv1.3;
     ssl_ciphers HIGH:!aNULL:!MD5;
@@ -221,36 +210,12 @@ server {{
     }}
 }}
 """
-
-    # Write updated Nginx configuration to file
     with open('/nginx/conf/default.conf', 'w') as f:
         f.write(nginx_conf)
 
 def restart_nginx_container():
     nginx_container = client.containers.get('nginx')
-
-    # Create the directory /etc/letsencrypt in the Nginx container
-    #nginx_container.exec_run('mkdir -p /etc/letsencrypt/live')
-
-    # Copy certificates to Nginx container
-    #copy_certs_to_nginx(nginx_container)
-
-    # Reload Nginx configuration
     nginx_container.exec_run('nginx -s reload')
-
-
-def copy_certs_to_nginx(nginx_container):
-    import tarfile
-    import io
-
-    certs_path = '/cert/conf/live'
-    for domain in os.listdir(certs_path):
-        domain_path = os.path.join(certs_path, domain)
-        data = io.BytesIO()
-        with tarfile.open(fileobj=data, mode='w') as tar:
-            tar.add(domain_path, arcname=f'live/{domain}')
-        data.seek(0)
-        nginx_container.put_archive('/etc/letsencrypt', data.read())
 
 @app.route('/', methods=['GET', 'POST'])
 def index():
@@ -259,31 +224,50 @@ def index():
     domain_options = [reverse_domain] if reverse_domain else []
 
     if request.method == 'POST':
-        domain = request.form.get('domain')
-        email = request.form.get('email')
+        domain = request.form.get('domain', '').strip()
+        email = request.form.get('email', '').strip()
+
+        job_id = domain
         steps_status = {
-            'nginx': {'label': 'Starting Nginx container', 'status': StepStatus.PENDING.value},
-            'certbot': {'label': 'Requesting Let\'s Encrypt certificate', 'status': StepStatus.PENDING.value},
-            'nginx_config': {'label': 'Updating Nginx configuration', 'status': StepStatus.PENDING.value},
-            'nginx_restart': {'label': 'Restarting Nginx container', 'status': StepStatus.PENDING.value},
+            'nginx':        {'label': 'Starting Nginx container',            'status': StepStatus.PENDING.value},
+            'certbot':      {'label': "Requesting Let's Encrypt certificate", 'status': StepStatus.PENDING.value},
+            'nginx_config': {'label': 'Updating Nginx configuration',         'status': StepStatus.PENDING.value},
+            'nginx_restart':{'label': 'Reloading Nginx',                      'status': StepStatus.PENDING.value},
             'complete': False,
-            'error': None
+            'error': None,
         }
+        with active_jobs_lock:
+            active_jobs[job_id] = steps_status
 
-        # Start SSL process in a separate thread
-        threading.Thread(target=start_ssl_process, args=(domain, email, steps_status)).start()
+        threading.Thread(
+            target=start_ssl_process,
+            args=(domain, email, job_id),
+            daemon=True,
+        ).start()
 
-        return render_template('index.html', public_ip=public_ip, domain_options=domain_options,
-                               domain=domain, email=email, steps_status=steps_status, processing=True)
+        return render_template(
+            'index.html',
+            public_ip=public_ip,
+            domain_options=domain_options,
+            domain=domain,
+            email=email,
+            steps_status=steps_status,
+            processing=True,
+            job_id=job_id,
+        )
 
     return render_template('index.html', public_ip=public_ip, domain_options=domain_options)
 
 @app.route('/status')
 def status():
-    # Implement a way to retrieve and send the current status of the SSL process
-    # For simplicity, this could be stored in a session or a temporary file
-    return {}
+    job_id = request.args.get('job_id', '')
+    with active_jobs_lock:
+        job = active_jobs.get(job_id)
+    if job is None:
+        return jsonify({'error': 'Job not found'}), 404
+    return jsonify(job)
 
 if __name__ == '__main__':
     logger.info("Starting Flask application on 0.0.0.0:8070")
-    app.run(host='0.0.0.0', port=8070, debug=True)
+    # use_reloader=False prevents the reloader from killing background threads
+    app.run(host='0.0.0.0', port=8070, debug=True, use_reloader=False)

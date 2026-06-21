@@ -17,9 +17,7 @@
             --warning: #f7c948;
         }
 
-        * {
-            box-sizing: border-box;
-        }
+        * { box-sizing: border-box; }
 
         body {
             margin: 0;
@@ -43,16 +41,9 @@
             box-shadow: 0 30px 60px rgba(0,0,0,0.35);
         }
 
-        h1 {
-            margin: 0 0 12px;
-            font-size: 1.8rem;
-            font-weight: 600;
-        }
+        h1 { margin: 0 0 12px; font-size: 1.8rem; font-weight: 600; }
 
-        p.subtitle {
-            margin: 0 0 24px;
-            color: var(--muted);
-        }
+        p.subtitle { margin: 0 0 24px; color: var(--muted); }
 
         .info-pill {
             display: inline-flex;
@@ -66,16 +57,9 @@
             margin-bottom: 24px;
         }
 
-        form {
-            display: grid;
-            gap: 20px;
-        }
+        form { display: grid; gap: 20px; }
 
-        label {
-            font-weight: 600;
-            margin-bottom: 8px;
-            display: block;
-        }
+        label { font-weight: 600; margin-bottom: 8px; display: block; }
 
         input, select {
             width: 100%;
@@ -87,15 +71,9 @@
             font-size: 1rem;
         }
 
-        input::placeholder {
-            color: rgba(255,255,255,0.5);
-        }
+        input::placeholder { color: rgba(255,255,255,0.5); }
 
-        small {
-            color: var(--muted);
-            display: block;
-            margin-top: 6px;
-        }
+        small { color: var(--muted); display: block; margin-top: 6px; }
 
         button {
             border: none;
@@ -142,8 +120,8 @@
         .status-pending { color: var(--warning); animation: pulse 1.5s ease infinite; }
 
         @keyframes pulse {
-            0% { opacity: 0.4; }
-            50% { opacity: 1; }
+            0%   { opacity: 0.4; }
+            50%  { opacity: 1; }
             100% { opacity: 0.4; }
         }
 
@@ -154,15 +132,8 @@
             font-weight: 500;
         }
 
-        .callout.success {
-            background: var(--accent-soft);
-            color: var(--accent);
-        }
-
-        .callout.error {
-            background: rgba(255,107,107,0.15);
-            color: var(--danger);
-        }
+        .callout.success { background: var(--accent-soft); color: var(--accent); }
+        .callout.error   { background: rgba(255,107,107,0.15); color: var(--danger); }
     </style>
 </head>
 <body>
@@ -201,21 +172,69 @@
         </form>
 
         {% if processing %}
-            <ul class="status-list">
+            <ul class="status-list" id="status-list">
                 {% for key, step in steps_status.items() if key not in ['complete', 'error'] %}
                     {% set status_value = step.status if step.status is string else step.status.value %}
-                    <li class="status-item status-{{ status_value.lower() }}">
+                    <li class="status-item status-{{ status_value.lower() }}" id="step-{{ key }}">
                         <span class="status-dot"></span>
                         <span>{{ step.label }}</span>
                     </li>
                 {% endfor %}
             </ul>
 
-            {% if steps_status.complete %}
-                <div class="callout success">SSL certificate setup completed successfully!</div>
-            {% elif steps_status.error %}
-                <div class="callout error">Error: {{ steps_status.error }}</div>
-            {% endif %}
+            <div id="callout-area">
+                {% if steps_status.complete %}
+                    <div class="callout success">SSL certificate setup completed successfully!</div>
+                {% elif steps_status.error %}
+                    <div class="callout error">Error: {{ steps_status.error }}</div>
+                {% endif %}
+            </div>
+
+            <script>
+                (function () {
+                    var jobId = {{ job_id | tojson }};
+                    var done = {{ (steps_status.complete or steps_status.error is not none) | tojson }};
+
+                    function updateUI(data) {
+                        var steps = ['nginx', 'certbot', 'nginx_config', 'nginx_restart'];
+                        steps.forEach(function (key) {
+                            var el = document.getElementById('step-' + key);
+                            if (!el || !data[key]) return;
+                            var s = data[key].status.toLowerCase();
+                            el.className = 'status-item status-' + s;
+                        });
+
+                        var callout = document.getElementById('callout-area');
+                        if (data.complete) {
+                            callout.innerHTML = '<div class="callout success">SSL certificate setup completed successfully!</div>';
+                            return true;
+                        }
+                        if (data.error) {
+                            callout.innerHTML = '<div class="callout error">Error: ' + data.error + '</div>';
+                            return true;
+                        }
+                        return false;
+                    }
+
+                    function poll() {
+                        fetch('/status?job_id=' + encodeURIComponent(jobId))
+                            .then(function (r) { return r.json(); })
+                            .then(function (data) {
+                                var finished = updateUI(data);
+                                if (!finished) {
+                                    setTimeout(poll, 2000);
+                                }
+                            })
+                            .catch(function () {
+                                setTimeout(poll, 3000);
+                            });
+                    }
+
+                    if (!done) {
+                        setTimeout(poll, 1000);
+                    }
+                })();
+            </script>
         {% endif %}
     </div>
 </body>
